@@ -24,11 +24,12 @@ public class GameState {
     protected int unitCancelationCounter = 0;  // only used if the action conflict resolution strategy is set to alternating
     
     protected int time = 0;
-    protected PhysicalGameState pgs = null;
-    protected HashMap<Unit,UnitActionAssignment> unitActions = new LinkedHashMap<>();
+    public PhysicalGameState pgs = null;
+    public HashMap<Unit,UnitActionAssignment> unitActions = new LinkedHashMap<>();
     protected UnitTypeTable utt = null;
 
-    protected int [][][][] matrixObservation;
+    public int [][][][] matrixObservation;
+    public int [][][][] entityObservation;
     public static final int numFeatureMaps = 5;
 
     /**
@@ -770,6 +771,75 @@ public class GameState {
         w.write("]");
         w.write("}");
     }
+
+    public ArrayList[] getEntityObservation(int player) {
+        // entityObservation[player] = new EntityObservation();
+        // int[][] resourceEntities = new int[]
+        ArrayList<Long> ids = new ArrayList<Long>();
+        ArrayList<Long> busyMask = new ArrayList<Long>();
+        ArrayList<int[]> resource = new ArrayList<int[]>();
+        ArrayList<int[]> base = new ArrayList<int[]>();
+        ArrayList<int[]> barracks = new ArrayList<int[]>();
+        ArrayList<int[]> worker = new ArrayList<int[]>();
+        ArrayList<int[]> light = new ArrayList<int[]>();
+        ArrayList<int[]> heavy = new ArrayList<int[]>();
+        ArrayList<int[]> ranged = new ArrayList<int[]>();
+        for (int i = 0; i < pgs.units.size(); i++) {
+            Unit u = pgs.units.get(i);
+            ids.add(u.getID());
+
+            if (unitActions.get(u) == null && u.getType().name.equals("Worker") && u.getPlayer() == player) {
+                busyMask.add(u.getID());
+            }
+            switch (u.getType().name) {
+                case "Resource":
+                    resource.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Base":
+                    base.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Barracks":
+                    barracks.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Worker":
+                    worker.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Light":
+                    light.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Heavy":
+                    heavy.add(new int[]{u.getX(), u.getY()});
+                    break;
+                case "Ranged":
+                    ranged.add(new int[]{u.getX(), u.getY()});
+                    break;
+            }
+            // UnitActionAssignment uaa = unitActions.get(u);
+            // System.out.println(u);
+            // System.out.println(uaa);
+            // matrixObservation[player][0][u.getY()][u.getX()] = u.getHitPoints();
+            // matrixObservation[player][1][u.getY()][u.getX()] = u.getResources();
+            // matrixObservation[player][2][u.getY()][u.getX()] = (u.getPlayer() + player) % 2;
+            // matrixObservation[player][3][u.getY()][u.getX()] = u.getType().ID;
+            // if (uaa != null) {
+            //     matrixObservation[player][4][u.getY()][u.getX()] = uaa.action.type;
+            // } else {
+            //     matrixObservation[player][4][u.getY()][u.getX()] = UnitAction.TYPE_NONE;
+            // }
+        }
+        return new ArrayList[]{
+            resource,
+            base,
+            barracks,
+            worker,
+            light,
+            heavy,
+            ranged,
+            ids,
+            busyMask
+        };
+    }
+
 
     public int [][][] getMatrixObservation(int player){
         if (matrixObservation == null) {

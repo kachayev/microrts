@@ -2,7 +2,7 @@
 * To change this template, choose Tools | Templates
 * and open the template in the editor.
 */
-package tests;
+package tests.entity;
 
 import java.io.Writer;
 import java.nio.file.Paths;
@@ -18,16 +18,18 @@ import ai.PassiveAI;
 import ai.RandomBiasedAI;
 import ai.RandomNoAttackAI;
 import ai.core.AI;
+import ai.jni.EntityResponse;
 import ai.jni.JNIAI;
 import ai.rewardfunction.RewardFunctionInterface;
 import ai.jni.JNIInterface;
-import ai.jni.Response;
+import ai.jni.EntityResponse;
 import gui.PhysicalGameStateJFrame;
 import gui.PhysicalGameStatePanel;
 import rts.GameState;
 import rts.PartiallyObservableGameState;
 import rts.PhysicalGameState;
 import rts.PlayerAction;
+import rts.ResourceUsage;
 import rts.Trace;
 import rts.TraceEntry;
 import rts.UnitAction;
@@ -50,7 +52,7 @@ import weka.core.pmml.jaxbbindings.False;
  *         the same server.
  * 
  */
-public class JNIGridnetClient {
+public class JNIEntityClient {
 
     // Settings
     public RewardFunctionInterface[] rfs;
@@ -62,7 +64,7 @@ public class JNIGridnetClient {
 
     // Internal State
     PhysicalGameState pgs;
-    public GameState gs;
+    GameState gs;
     GameState player1gs, player2gs;
     boolean gameover = false;
     boolean layerJSON = true;
@@ -75,11 +77,11 @@ public class JNIGridnetClient {
     int[][][] masks;
     double[] rewards;
     boolean[] dones;
-    Response response;
+    EntityResponse response;
     PlayerAction pa1;
     PlayerAction pa2;
 
-    public JNIGridnetClient(RewardFunctionInterface[] a_rfs, String a_micrortsPath, String a_mapPath, AI a_ai2, UnitTypeTable a_utt, boolean partial_obs) throws Exception{
+    public JNIEntityClient(RewardFunctionInterface[] a_rfs, String a_micrortsPath, String a_mapPath, AI a_ai2, UnitTypeTable a_utt, boolean partial_obs) throws Exception{
         micrortsPath = a_micrortsPath;
         mapPath = a_mapPath;
         rfs = a_rfs;
@@ -101,7 +103,7 @@ public class JNIGridnetClient {
         masks = new int[pgs.getHeight()][pgs.getWidth()][1+6+4+4+4+4+utt.getUnitTypes().size()+maxAttackRadius*maxAttackRadius];
         rewards = new double[rfs.length];
         dones = new boolean[rfs.length];
-        response = new Response(null, null, null, null);
+        response = new EntityResponse(null, null, null, null);
     }
 
     public byte[] render(boolean returnPixels) throws Exception {
@@ -123,7 +125,7 @@ public class JNIGridnetClient {
         return data.getData();
     }
 
-    public Response gameStep(int[][] action, int player) throws Exception {
+    public EntityResponse gameStep(int[][] move, int player) throws Exception {
         if (partialObs) {
             player1gs = new PartiallyObservableGameState(gs, player);
             player2gs = new PartiallyObservableGameState(gs, 1 - player);
@@ -131,7 +133,16 @@ public class JNIGridnetClient {
             player1gs = gs;
             player2gs = gs;
         }
-        pa1 = ai1.getAction(player, player1gs, action);
+        // pa1 = ai1.getAction(player, player1gs, move);
+        PlayerAction pa1 = new PlayerAction();
+        for (int[] a: move) {
+            Unit u = gs.pgs.getUnit(a[0]);
+            UnitAction ua = new UnitAction(UnitAction.TYPE_MOVE, a[1]);
+            pa1.addUnitAction(u, ua);
+        }
+        pa1.fillWithNones(gs, player, 1);
+        System.out.println("pa1");
+        System.out.println(pa1);
         pa2 = ai2.getAction(1 - player, player2gs);
         gs.issueSafe(pa1);
         gs.issueSafe(pa2);
@@ -151,30 +162,11 @@ public class JNIGridnetClient {
             rewards[i] = rfs[i].getReward();
         }
         response.set(
-            ai1.getObservation(player, player1gs),
+            ai1.getEntityObservation(player, player1gs),
             rewards,
             dones,
             ai1.computeInfo(player, player2gs));
         return response;
-    }
-
-    public int[][][] getMasks(int player) throws Exception {
-        for (int i = 0; i < masks.length; i++) {
-            for (int j = 0; j < masks[0].length; j++) {
-                for (int k = 0; k < masks[0][0].length; k++) {
-                    masks[i][j][k] = 0;
-                }
-            }
-        }
-        for (int i = 0; i < pgs.getUnits().size(); i++) {
-            Unit u = pgs.getUnits().get(i);
-            UnitActionAssignment uaa = gs.getUnitActions().get(u);
-            if (u.getPlayer() == player && uaa == null) {
-                masks[u.getY()][u.getX()][0] = 1;
-                UnitAction.getValidActionArray(u, gs, utt, masks[u.getY()][u.getX()], maxAttackRadius, 1);
-            }
-        }
-        return masks;
     }
 
     public String sendUTT() throws Exception {
@@ -183,7 +175,7 @@ public class JNIGridnetClient {
         return w.toString(); // now it works fine
     }
 
-    public Response reset(int player) throws Exception {
+    public EntityResponse reset(int player) throws Exception {
         ai1.reset();
         ai2 = ai2.clone();
         ai2.reset();
@@ -200,7 +192,7 @@ public class JNIGridnetClient {
             dones[i] = false;
         }
         response.set(
-            ai1.getObservation(player, player1gs),
+            ai1.getEntityObservation(player, player1gs),
             rewards,
             dones,
             "{}");
