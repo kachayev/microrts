@@ -40,7 +40,6 @@ import rts.UnitActionAssignment;
 import rts.units.Unit;
 import rts.units.UnitTypeTable;
 import util.NDBuffer;
-import tests.JNIGridnetClientSelfPlay;
 
 /**
  *
@@ -75,7 +74,8 @@ public class JNIGridnetSharedMemVecClient {
 
     // synchronization primitives
     final ArrayList<Thread> pool;
-    final AtomicRefernce<CountDownLatch> clientStepBlocker;
+    final int numClients;
+    final AtomicReference<JNIClientThreadSync> clientSyncRef;
 
     public JNIGridnetSharedMemVecClient(int a_num_selfplayenvs, int a_num_envs, int a_max_steps, RewardFunctionInterface[] a_rfs,
             String a_micrortsPath, String mapPath, AI[] a_ai2s, UnitTypeTable a_utt, boolean partial_obs,
@@ -102,22 +102,24 @@ public class JNIGridnetSharedMemVecClient {
 
         // initialize clients
         envSteps = new int[a_num_selfplayenvs + a_num_envs];
-        final CountDownLatch clientReadyCounter = new CountDownLatch(a_num_selfplayenvs/2 + a_num_envs);
-        clientStepBlocker = new AtomicReference<>(new CountDownLatch(1));
+        numClients = a_num_selfplayenvs/2 + a_num_envs;
+        final CountDownLatch clientReadyCounter = new CountDownLatch(numClients);
+        clientSyncRef = new AtomicReference<>(
+            JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.STEP));
 
         selfPlayClients = new JNIGridnetSharedMemClientSelfPlay[a_num_selfplayenvs/2];
         for (int i = 0; i < selfPlayClients.length; i++) {
             int clientOffset = i*2;
             selfPlayClients[i] = new JNIGridnetSharedMemClientSelfPlay(a_rfs, a_micrortsPath, mapPath, a_utt, partialObs,
                 clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer,
-                clientReadyCounter, clientStepBlocker);
+                clientReadyCounter, clientSyncRef);
         }
         clients = new JNIGridnetSharedMemClient[a_num_envs];
         for (int i = 0; i < clients.length; i++) {
             int clientOffset = i+selfPlayClients.length*2;
             clients[i] = new JNIGridnetSharedMemClient(a_rfs, this.mapPath, a_ai2s[i], a_utt, partialObs,
                 clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer,
-                clientReadyCounter, clientStepBlocker);
+                clientReadyCounter, clientSyncRef);
         }
 
         // initialize storage
@@ -167,9 +169,17 @@ public class JNIGridnetSharedMemVecClient {
     public Responses gameStep(int[] players) throws Exception {
         if (pool != null) {
             // swap lock for the next operation
-            clientStepBlocker.getAndSet(new CountDownLatch(1)).countDown();
+            final JNIClientThreadSync currentSync = clientSyncRef.getAndSet(
+                // xxx(okachaiev): replace false/true with ENUM
+                // swapping next action pointer is actually not safe
+                // because in this case we rely on step/getMasks being
+                // executed in a very specific order
+                JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.MASKS)
+            );
+
+            currentSync.getBlockerLock().countDown();
             // wait for all threads to finish
-            clientStepReady.wait();
+            currentSync.getReadyLock().await();
         }
 
         for (int i = 0; i < selfPlayClients.length; i++) {
@@ -232,47 +242,27 @@ public class JNIGridnetSharedMemVecClient {
     }
 
     public void getMasks(final int player) throws Exception {
-        List<Future<Boolean>> selfPlayMaskResults = null;
-        // if (pool != null) {
-        //     final List<Callable<Boolean>> selfPlayMaskRequests = new ArrayList<>();
-        //     for (int i = 0; i < selfPlayClients.length; i++) {
-        //         final int clientIndex = i;
-        //         selfPlayMaskRequests.add(() -> {
-        //             selfPlayClients[clientIndex].getMasks(0);
-        //             selfPlayClients[clientIndex].getMasks(1);
-        //             return true;
-        //         });
-        //     }
-        //     selfPlayMaskResults = pool.invokeAll(selfPlayMaskRequests);
-        // }
+        if (null != pool) {
+            // swap lock for the next operation
+            final JNIClientThreadSync currentSync = clientSyncRef.getAndSet(
+                // xxx(okachaiev): replace false/true with ENUM
+                // swapping next action pointer is actually not safe
+                // because in this case we rely on step/getMasks being
+                // executed in a very specific order
+                JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.STEP)
+            );
 
-        for (int i = 0; i < selfPlayClients.length; i++) {
-            if (null == selfPlayMaskResults) {
-                selfPlayClients[i].getMasks(0);
-                selfPlayClients[i].getMasks(1);
-            } else {
-                selfPlayMaskResults.get(i).get();
+            currentSync.getBlockerLock().countDown();
+            // wait for all threads to finish
+            currentSync.getReadyLock().await();
+        } else {
+            for (int i = 0; i < selfPlayClients.length; i++) {
+                    selfPlayClients[i].getMasks(0);
+                    selfPlayClients[i].getMasks(1);
             }
-        }
 
-        List<Future<Boolean>> maskResults = null;
-        // if (pool != null) {
-        //     final List<Callable<Boolean>> maskRequests = new ArrayList<>();
-        //     for (int i = 0; i < clients.length; i++) {
-        //         final int clientIndex = i;
-        //         maskRequests.add(() -> {
-        //             clients[clientIndex].getMasks(player);
-        //             return true;
-        //         });
-        //     }
-        //     maskResults = pool.invokeAll(maskRequests);
-        // }
-
-        for (int i = 0; i < clients.length; i++) {
-            if (null == maskResults) {
-                clients[i].getMasks(player);
-            } else {
-                maskResults.get(i).get();
+            for (int i = 0; i < clients.length; i++) {
+                    clients[i].getMasks(player);
             }
         }
     }
@@ -289,9 +279,9 @@ public class JNIGridnetSharedMemVecClient {
             }
         }
 
-        // xxx(okachaiev): exchaange shutdown flag
-        // if (pool != null) {
-        //     pool.shutdownNow();
-        // }
+        // xxx(okachaiev): very wrong
+        if (pool != null) {
+            pool.forEach(Thread::interrupt);
+        }
     }
 }

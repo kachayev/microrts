@@ -80,20 +80,20 @@ public class JNIGridnetSharedMemClient implements Runnable {
 
     // sync
     final CountDownLatch clientReadyCounter;
-    final AtomicReference<CountDownLatch> clientStepBlocker;
+    final AtomicReference<JNIClientThreadSync> clientSyncRef;
 
     public JNIGridnetSharedMemClient(RewardFunctionInterface[] a_rfs, String mapPath, AI a_ai2, UnitTypeTable a_utt, boolean partial_obs,
             int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer,
-            CountDownLatch clientReadyCounter, AtomicReference<CountDownLatch> clientStepBlocker) throws Exception{
+            CountDownLatch clientReadyCounter, AtomicReference<JNIClientThreadSync> clientSyncRef) throws Exception{
         this.clientOffset = clientOffset;
         this.obsBuffer = obsBuffer;
         this.actionMaskBuffer = actionMaskBuffer;
         this.actionBuffer = actionBuffer;
         this.clientReadyCounter = clientReadyCounter;
-        this.clientStepBlocker = clientStepBlocker;
+        this.clientSyncRef = clientSyncRef;
         this.mapPath = mapPath;
         partialObs = partial_obs;
-        
+
         rfs = a_rfs;
         utt = a_utt;
         pgs = PhysicalGameState.load(mapPath, utt);
@@ -212,13 +212,38 @@ public class JNIGridnetSharedMemClient implements Runnable {
 
     @Override
     public void run() {
+        JNIClientThreadSync clientSync = null;
         clientReadyCounter.countDown();
-        while (true) {
+        boolean running = true;
+        while (running) {
             try {
-                clientStepBlocker.get().await();
-                final CountDownLatch clientStepReadyLock = clientStepReady.get();
+                clientSync = clientSyncRef.get();
+                clientSync.getBlockerLock().await();
+                switch (clientSync.getOpType()) {
+                    case STEP:
+                        gameStep(0);
+                        break;
+
+                    case MASKS:
+                        // xxx(okachaiev): seems like this is always 0, right?
+                        getMasks(0);
+                        break;
+
+                    case SHUTDOWN:
+                        running = false;
+                        break;
+                }
+            } catch(InterruptedException e) {
+                // no-op
+                // xxx(okachaiev): very wrong!
+                running = false;
+            } catch(Exception e) {
+                e.printStackTrace();
+                // xxx(okachaiev): again no op?
             } finally {
-                clientStepReadyLock.countDown();
+                if (null != clientSync) {
+                    clientSync.getReadyLock().countDown();
+                }
             }
         }
     }

@@ -4,6 +4,8 @@ import java.io.Writer;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.swing.plaf.basic.BasicInternalFrameTitlePane.SystemMenuBar;
 
@@ -62,7 +64,6 @@ public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
     public final int numPlayers = 2;
 
     final int clientOffset;
-    final CountDownLatch clientReadyCounter;
 
     // storage
     final NDBuffer obsBuffer;
@@ -73,14 +74,19 @@ public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
     Response[] response = new Response[2];
     PlayerAction[] pas = new PlayerAction[2];
 
+    // sync
+    final CountDownLatch clientReadyCounter;
+    final AtomicReference<JNIClientThreadSync> clientSyncRef;
+
     public JNIGridnetSharedMemClientSelfPlay(RewardFunctionInterface[] a_rfs, String a_micrortsPath, String a_mapPath, UnitTypeTable a_utt, boolean partial_obs,
             int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer,
-            CountDownLatch threadsReadyCounter) throws Exception{
+            CountDownLatch clientReadyCounter, AtomicReference<JNIClientThreadSync> clientSyncRef) throws Exception{
         this.clientOffset = clientOffset;
         this.obsBuffer = obsBuffer;
         this.actionMaskBuffer = actionMaskBuffer;
         this.actionBuffer = actionBuffer;
         this.clientReadyCounter = clientReadyCounter;
+        this.clientSyncRef = clientSyncRef;
 
         micrortsPath = a_micrortsPath;
         mapPath = a_mapPath;
@@ -196,6 +202,39 @@ public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
 
     @Override
     public void run() {
+        JNIClientThreadSync clientSync = null;
         clientReadyCounter.countDown();
+        boolean running = true;
+        while (running) {
+            try {
+                clientSync = clientSyncRef.get();
+                clientSync.getBlockerLock().await();
+                switch (clientSync.getOpType()) {
+                    case STEP:
+                        gameStep();
+                        break;
+
+                    case MASKS:
+                        getMasks(0);
+                        getMasks(1);
+                        break;
+
+                    case SHUTDOWN:
+                        running = false;
+                        break;
+                }
+            } catch(InterruptedException e) {
+                // no-op
+                // xxx(okachaiev): very wrong!
+                running = false;
+            } catch(Exception e) {
+                e.printStackTrace();
+                // xxx(okachaiev): again no op?
+            } finally {
+                if (null != clientSync) {
+                    clientSync.getReadyLock().countDown();
+                }
+            }
+        }
     }
 }
