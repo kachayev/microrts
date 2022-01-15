@@ -4,18 +4,17 @@
 */
 package tests;
 
+import java.io.StringWriter;
 import java.io.Writer;
-import java.nio.file.Paths;
 import java.nio.IntBuffer;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.awt.image.BufferedImage;
-import java.io.StringWriter;
 import java.awt.image.DataBufferByte;
 import java.awt.image.WritableRaster;
 
@@ -74,7 +73,9 @@ public class JNIGridnetSharedMemVecClient {
     final double[][] terminalReward;
     final boolean[][] terminalDone;
 
-    final ExecutorService pool;
+    // synchronization primitives
+    final ArrayList<Thread> pool;
+    final AtomicRefernce<CountDownLatch> clientStepBlocker;
 
     public JNIGridnetSharedMemVecClient(int a_num_selfplayenvs, int a_num_envs, int a_max_steps, RewardFunctionInterface[] a_rfs,
             String a_micrortsPath, String mapPath, AI[] a_ai2s, UnitTypeTable a_utt, boolean partial_obs,
@@ -101,17 +102,22 @@ public class JNIGridnetSharedMemVecClient {
 
         // initialize clients
         envSteps = new int[a_num_selfplayenvs + a_num_envs];
+        final CountDownLatch clientReadyCounter = new CountDownLatch(a_num_selfplayenvs/2 + a_num_envs);
+        clientStepBlocker = new AtomicReference<>(new CountDownLatch(1));
+
         selfPlayClients = new JNIGridnetSharedMemClientSelfPlay[a_num_selfplayenvs/2];
         for (int i = 0; i < selfPlayClients.length; i++) {
             int clientOffset = i*2;
             selfPlayClients[i] = new JNIGridnetSharedMemClientSelfPlay(a_rfs, a_micrortsPath, mapPath, a_utt, partialObs,
-                clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer);
+                clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer,
+                clientReadyCounter, clientStepBlocker);
         }
         clients = new JNIGridnetSharedMemClient[a_num_envs];
         for (int i = 0; i < clients.length; i++) {
             int clientOffset = i+selfPlayClients.length*2;
             clients[i] = new JNIGridnetSharedMemClient(a_rfs, this.mapPath, a_ai2s[i], a_utt, partialObs,
-                clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer);
+                clientOffset, this.obsBuffer, this.actionMaskBuffer, this.actionBuffer,
+                clientReadyCounter, clientStepBlocker);
         }
 
         // initialize storage
@@ -123,7 +129,17 @@ public class JNIGridnetSharedMemVecClient {
         terminalDone = new boolean[2][numRfs];
 
         if (threadPoolSize > 0) {
-            pool = Executors.newFixedThreadPool(threadPoolSize);
+            pool = new ArrayList<>();
+            for (int i = 0; i < selfPlayClients.length; i++) {
+                pool.add(new Thread(selfPlayClients[i]));
+            }
+            for (int i = 0; i < clients.length; i++) {
+                pool.add(new Thread(clients[i]));
+            }
+
+            pool.forEach(Thread::start);
+            // wait or all threads to start
+            clientReadyCounter.await();
         } else {
             pool = null;
         }
@@ -136,7 +152,8 @@ public class JNIGridnetSharedMemVecClient {
             rs[i*2+1] = selfPlayClients[i].getResponse(1);
         }
         for (int i = selfPlayClients.length*2; i < players.length; i++) {
-            rs[i] = clients[i-selfPlayClients.length*2].reset(players[i]);
+            clients[i-selfPlayClients.length*2].reset(players[i]);
+            rs[i] = clients[i-selfPlayClients.length*2].getResponse();
         }
 
         for (int i = 0; i < rs.length; i++) {
@@ -148,26 +165,16 @@ public class JNIGridnetSharedMemVecClient {
     }
 
     public Responses gameStep(int[] players) throws Exception {
-        List<Future<Boolean>> selfPlayStepResults = null;
         if (pool != null) {
-            final List<Callable<Boolean>> selfPlayStepRequests = new ArrayList<>();
-
-            for (int i = 0; i < selfPlayClients.length; i++) {
-                final int clientInd = i;
-                selfPlayStepRequests.add(() -> {
-                    selfPlayClients[clientInd].gameStep();
-                    return true;
-                });
-            }
-
-            selfPlayStepResults = pool.invokeAll(selfPlayStepRequests);
+            // swap lock for the next operation
+            clientStepBlocker.getAndSet(new CountDownLatch(1)).countDown();
+            // wait for all threads to finish
+            clientStepReady.wait();
         }
 
         for (int i = 0; i < selfPlayClients.length; i++) {
-            if (null == selfPlayStepResults) {
+            if (null == pool) {
                 selfPlayClients[i].gameStep();
-            } else {
-                selfPlayStepResults.get(i).get();
             }
             rs[i*2] = selfPlayClients[i].getResponse(0);
             rs[i*2+1] = selfPlayClients[i].getResponse(1);
@@ -195,35 +202,12 @@ public class JNIGridnetSharedMemVecClient {
             }
         }
 
-        List<Future<Response>> stepResults = null;
-        if (pool != null) {
-            final List<Callable<Response>> stepRequests = new ArrayList<>();
-
-            for (int i = selfPlayClients.length*2; i < players.length; i++) {
-                final int clientInd = i-selfPlayClients.length*2;
-                final int playerInd = i;
-                stepRequests.add(() -> {
-                    try {
-                        return clients[clientInd].gameStep(players[playerInd]);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        // xxx(okachiaev): likely need log it here
-                        // not sure what is the best cource of actions here
-                        return new Response(null, null, null, null);
-                    }
-                });
-            }
-
-            stepResults = pool.invokeAll(stepRequests);
-        }
-
         for (int i = selfPlayClients.length*2; i < players.length; i++) {
             envSteps[i] += 1;
-            if (null == stepResults) {
-                rs[i] = clients[i-selfPlayClients.length*2].gameStep(players[i]);
-            } else {
-                rs[i] = stepResults.get(i-selfPlayClients.length*2).get();
+            if (null == pool) {
+                clients[i-selfPlayClients.length*2].gameStep(players[i]);
             }
+            rs[i] = clients[i-selfPlayClients.length*2].getResponse();
             if (rs[i].done[0] || envSteps[i] >= maxSteps) {
                 // stash previous values
                 System.arraycopy(rs[i].reward, 0, terminalReward[0], 0, numRfs);
@@ -249,18 +233,18 @@ public class JNIGridnetSharedMemVecClient {
 
     public void getMasks(final int player) throws Exception {
         List<Future<Boolean>> selfPlayMaskResults = null;
-        if (pool != null) {
-            final List<Callable<Boolean>> selfPlayMaskRequests = new ArrayList<>();
-            for (int i = 0; i < selfPlayClients.length; i++) {
-                final int clientIndex = i;
-                selfPlayMaskRequests.add(() -> {
-                    selfPlayClients[clientIndex].getMasks(0);
-                    selfPlayClients[clientIndex].getMasks(1);
-                    return true;
-                });
-            }
-            selfPlayMaskResults = pool.invokeAll(selfPlayMaskRequests);
-        }
+        // if (pool != null) {
+        //     final List<Callable<Boolean>> selfPlayMaskRequests = new ArrayList<>();
+        //     for (int i = 0; i < selfPlayClients.length; i++) {
+        //         final int clientIndex = i;
+        //         selfPlayMaskRequests.add(() -> {
+        //             selfPlayClients[clientIndex].getMasks(0);
+        //             selfPlayClients[clientIndex].getMasks(1);
+        //             return true;
+        //         });
+        //     }
+        //     selfPlayMaskResults = pool.invokeAll(selfPlayMaskRequests);
+        // }
 
         for (int i = 0; i < selfPlayClients.length; i++) {
             if (null == selfPlayMaskResults) {
@@ -272,17 +256,17 @@ public class JNIGridnetSharedMemVecClient {
         }
 
         List<Future<Boolean>> maskResults = null;
-        if (pool != null) {
-            final List<Callable<Boolean>> maskRequests = new ArrayList<>();
-            for (int i = 0; i < clients.length; i++) {
-                final int clientIndex = i;
-                maskRequests.add(() -> {
-                    clients[clientIndex].getMasks(player);
-                    return true;
-                });
-            }
-            maskResults = pool.invokeAll(maskRequests);
-        }
+        // if (pool != null) {
+        //     final List<Callable<Boolean>> maskRequests = new ArrayList<>();
+        //     for (int i = 0; i < clients.length; i++) {
+        //         final int clientIndex = i;
+        //         maskRequests.add(() -> {
+        //             clients[clientIndex].getMasks(player);
+        //             return true;
+        //         });
+        //     }
+        //     maskResults = pool.invokeAll(maskRequests);
+        // }
 
         for (int i = 0; i < clients.length; i++) {
             if (null == maskResults) {
@@ -305,8 +289,9 @@ public class JNIGridnetSharedMemVecClient {
             }
         }
 
-        if (pool != null) {
-            pool.shutdownNow();
-        }
+        // xxx(okachaiev): exchaange shutdown flag
+        // if (pool != null) {
+        //     pool.shutdownNow();
+        // }
     }
 }

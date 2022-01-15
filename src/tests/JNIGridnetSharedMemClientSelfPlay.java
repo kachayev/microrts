@@ -42,8 +42,7 @@ import weka.core.pmml.jaxbbindings.False;
  * with direct buffer (JVM allocated).
  * 
  */
-public class JNIGridnetSharedMemClientSelfPlay {
-
+public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
 
     // Settings
     public final RewardFunctionInterface[] rfs;
@@ -63,6 +62,7 @@ public class JNIGridnetSharedMemClientSelfPlay {
     public final int numPlayers = 2;
 
     final int clientOffset;
+    final CountDownLatch clientReadyCounter;
 
     // storage
     final NDBuffer obsBuffer;
@@ -74,11 +74,13 @@ public class JNIGridnetSharedMemClientSelfPlay {
     PlayerAction[] pas = new PlayerAction[2];
 
     public JNIGridnetSharedMemClientSelfPlay(RewardFunctionInterface[] a_rfs, String a_micrortsPath, String a_mapPath, UnitTypeTable a_utt, boolean partial_obs,
-            int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer) throws Exception{
+            int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer,
+            CountDownLatch threadsReadyCounter) throws Exception{
         this.clientOffset = clientOffset;
         this.obsBuffer = obsBuffer;
         this.actionMaskBuffer = actionMaskBuffer;
         this.actionBuffer = actionBuffer;
+        this.clientReadyCounter = clientReadyCounter;
 
         micrortsPath = a_micrortsPath;
         mapPath = a_mapPath;
@@ -140,12 +142,7 @@ public class JNIGridnetSharedMemClientSelfPlay {
             }
 
             playergs[i].getBufferObservation(i, clientOffset+i, obsBuffer);
-
-            response[i].set(
-                null,
-                rewards[i],
-                dones[i],
-                "{}");
+            response[i].set(null, rewards[i], dones[i], "{}");
         }
     }
 
@@ -183,12 +180,7 @@ public class JNIGridnetSharedMemClientSelfPlay {
             }
 
             playergs[i].getBufferObservation(i, clientOffset+i, obsBuffer);
-
-            response[i].set(
-                null,
-                rewards[i],
-                dones[i],
-                "{}");
+            response[i].set(null, rewards[i], dones[i], "{}");
         }
     }
 
@@ -197,8 +189,13 @@ public class JNIGridnetSharedMemClientSelfPlay {
     }
 
     public void close() throws Exception {
-        if (w!=null) {
+        if (w != null) {
             w.dispose();    
         }
+    }
+
+    @Override
+    public void run() {
+        clientReadyCounter.countDown();
     }
 }

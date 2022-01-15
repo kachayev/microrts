@@ -8,6 +8,8 @@ import java.io.Writer;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.awt.image.BufferedImage;
 import java.io.StringWriter;
 import java.awt.image.DataBufferByte;
@@ -43,7 +45,7 @@ import weka.core.pmml.jaxbbindings.False;
  * with direct buffer (JVM allocated).
  * 
  */
-public class JNIGridnetSharedMemClient {
+public class JNIGridnetSharedMemClient implements Runnable {
 
     // Settings
     public RewardFunctionInterface[] rfs;
@@ -76,12 +78,19 @@ public class JNIGridnetSharedMemClient {
     PlayerAction pa1;
     PlayerAction pa2;
 
+    // sync
+    final CountDownLatch clientReadyCounter;
+    final AtomicReference<CountDownLatch> clientStepBlocker;
+
     public JNIGridnetSharedMemClient(RewardFunctionInterface[] a_rfs, String mapPath, AI a_ai2, UnitTypeTable a_utt, boolean partial_obs,
-            int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer) throws Exception{
+            int clientOffset, NDBuffer obsBuffer, NDBuffer actionMaskBuffer, NDBuffer actionBuffer,
+            CountDownLatch clientReadyCounter, AtomicReference<CountDownLatch> clientStepBlocker) throws Exception{
         this.clientOffset = clientOffset;
         this.obsBuffer = obsBuffer;
         this.actionMaskBuffer = actionMaskBuffer;
         this.actionBuffer = actionBuffer;
+        this.clientReadyCounter = clientReadyCounter;
+        this.clientStepBlocker = clientStepBlocker;
         this.mapPath = mapPath;
         partialObs = partial_obs;
         
@@ -119,7 +128,7 @@ public class JNIGridnetSharedMemClient {
         return data.getData();
     }
 
-    public Response gameStep(int player) throws Exception {
+    public void gameStep(int player) throws Exception {
         if (partialObs) {
             player1gs = new PartiallyObservableGameState(gs, player);
             player2gs = new PartiallyObservableGameState(gs, 1 - player);
@@ -148,13 +157,7 @@ public class JNIGridnetSharedMemClient {
         }
 
         player1gs.getBufferObservation(player, clientOffset, obsBuffer);
-
-        response.set(
-            null,
-            rewards,
-            dones,
-            ai1.computeInfo(player, player2gs));
-        return response;
+        response.set(null, rewards, dones, ai1.computeInfo(player, player2gs));
     }
 
     public void getMasks(int player) throws Exception {
@@ -176,7 +179,7 @@ public class JNIGridnetSharedMemClient {
         return w.toString(); // now it works fine
     }
 
-    public Response reset(int player) throws Exception {
+    public void reset(int player) throws Exception {
         ai1.reset();
         ai2 = ai2.clone();
         ai2.reset();
@@ -194,18 +197,29 @@ public class JNIGridnetSharedMemClient {
         }
 
         player1gs.getBufferObservation(player, clientOffset, obsBuffer);
+        response.set(null, rewards, dones, "{}");
+    }
 
-        response.set(
-            null,
-            rewards,
-            dones,
-            "{}");
+    public Response getResponse() {
         return response;
     }
 
     public void close() throws Exception {
-        if (w!=null) {
+        if (w != null) {
             w.dispose();    
+        }
+    }
+
+    @Override
+    public void run() {
+        clientReadyCounter.countDown();
+        while (true) {
+            try {
+                clientStepBlocker.get().await();
+                final CountDownLatch clientStepReadyLock = clientStepReady.get();
+            } finally {
+                clientStepReadyLock.countDown();
+            }
         }
     }
 }
