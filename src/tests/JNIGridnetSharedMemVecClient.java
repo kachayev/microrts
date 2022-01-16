@@ -104,8 +104,7 @@ public class JNIGridnetSharedMemVecClient {
         envSteps = new int[a_num_selfplayenvs + a_num_envs];
         numClients = a_num_selfplayenvs/2 + a_num_envs;
         final CountDownLatch clientReadyCounter = new CountDownLatch(numClients);
-        clientSyncRef = new AtomicReference<>(
-            JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.STEP));
+        clientSyncRef = new AtomicReference<>(JNIClientThreadSync.forClients(numClients));
 
         selfPlayClients = new JNIGridnetSharedMemClientSelfPlay[a_num_selfplayenvs/2];
         for (int i = 0; i < selfPlayClients.length; i++) {
@@ -168,18 +167,7 @@ public class JNIGridnetSharedMemVecClient {
 
     public Responses gameStep(int[] players) throws Exception {
         if (pool != null) {
-            // swap lock for the next operation
-            final JNIClientThreadSync currentSync = clientSyncRef.getAndSet(
-                // xxx(okachaiev): replace false/true with ENUM
-                // swapping next action pointer is actually not safe
-                // because in this case we rely on step/getMasks being
-                // executed in a very specific order
-                JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.MASKS)
-            );
-
-            currentSync.getBlockerLock().countDown();
-            // wait for all threads to finish
-            currentSync.getReadyLock().await();
+            JNIClientThreadSync.executeOn(clientSyncRef, JNIClientThreadSync.OpType.STEP, numClients);
         }
 
         for (int i = 0; i < selfPlayClients.length; i++) {
@@ -243,26 +231,14 @@ public class JNIGridnetSharedMemVecClient {
 
     public void getMasks(final int player) throws Exception {
         if (null != pool) {
-            // swap lock for the next operation
-            final JNIClientThreadSync currentSync = clientSyncRef.getAndSet(
-                // xxx(okachaiev): replace false/true with ENUM
-                // swapping next action pointer is actually not safe
-                // because in this case we rely on step/getMasks being
-                // executed in a very specific order
-                JNIClientThreadSync.forClients(numClients, JNIClientThreadSync.OpType.STEP)
-            );
-
-            currentSync.getBlockerLock().countDown();
-            // wait for all threads to finish
-            currentSync.getReadyLock().await();
+            JNIClientThreadSync.executeOn(clientSyncRef, JNIClientThreadSync.OpType.MASKS, numClients);
         } else {
             for (int i = 0; i < selfPlayClients.length; i++) {
-                    selfPlayClients[i].getMasks(0);
-                    selfPlayClients[i].getMasks(1);
+                selfPlayClients[i].getMasks(0);
+                selfPlayClients[i].getMasks(1);
             }
-
             for (int i = 0; i < clients.length; i++) {
-                    clients[i].getMasks(player);
+                clients[i].getMasks(player);
             }
         }
     }
@@ -279,9 +255,8 @@ public class JNIGridnetSharedMemVecClient {
             }
         }
 
-        // xxx(okachaiev): very wrong
         if (pool != null) {
-            pool.forEach(Thread::interrupt);
+            JNIClientThreadSync.executeOn(clientSyncRef, JNIClientThreadSync.OpType.SHUTDOWN, numClients);
         }
     }
 }

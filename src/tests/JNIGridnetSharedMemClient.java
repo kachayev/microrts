@@ -210,6 +210,9 @@ public class JNIGridnetSharedMemClient implements Runnable {
         }
     }
 
+    // xxx(okachaiev): the overlap between this code and the code in
+    // selfplay client is quite large. i would rather refactor this to
+    // be shared (either as a parent class or as a wrapper)
     @Override
     public void run() {
         JNIClientThreadSync clientSync = null;
@@ -219,7 +222,10 @@ public class JNIGridnetSharedMemClient implements Runnable {
             try {
                 clientSync = clientSyncRef.get();
                 clientSync.getBlockerLock().await();
-                switch (clientSync.getOpType()) {
+                switch (clientSync.getNextOpType()) {
+                    case NOOP:
+                        break;
+
                     case STEP:
                         gameStep(0);
                         break;
@@ -235,11 +241,11 @@ public class JNIGridnetSharedMemClient implements Runnable {
                 }
             } catch(InterruptedException e) {
                 // no-op
-                // xxx(okachaiev): very wrong!
+                // xxx(okachaiev): is this the right thing to do?
                 running = false;
             } catch(Exception e) {
                 e.printStackTrace();
-                // xxx(okachaiev): again no op?
+                // xxx(okachaiev): is this the right thing to do?
             } finally {
                 if (null != clientSync) {
                     clientSync.getReadyLock().countDown();

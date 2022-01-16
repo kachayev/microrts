@@ -209,7 +209,10 @@ public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
             try {
                 clientSync = clientSyncRef.get();
                 clientSync.getBlockerLock().await();
-                switch (clientSync.getOpType()) {
+                switch (clientSync.getNextOpType()) {
+                    case NOOP:
+                        break;
+
                     case STEP:
                         gameStep();
                         break;
@@ -225,11 +228,11 @@ public class JNIGridnetSharedMemClientSelfPlay implements Runnable {
                 }
             } catch(InterruptedException e) {
                 // no-op
-                // xxx(okachaiev): very wrong!
+                // xxx(okachaiev): is this the right thing to do?
                 running = false;
             } catch(Exception e) {
                 e.printStackTrace();
-                // xxx(okachaiev): again no op?
+                // xxx(okachaiev): is this the right thing to do?
             } finally {
                 if (null != clientSync) {
                     clientSync.getReadyLock().countDown();
