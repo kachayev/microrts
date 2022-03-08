@@ -37,6 +37,7 @@ import util.XMLWriter;
 public interface JNIInterface {
 	public PlayerAction getAction(int player, GameState gs, int[][] action) throws Exception;
     public int[][][] getObservation(int player, GameState gs) throws Exception;
+    public ArrayList[] getEntityObservation(int player, GameState gs) throws Exception;
     public void reset();
     public double computeReward(int i, int j, GameState gs) throws Exception;
     public String computeInfo(int player, GameState gs) throws Exception;

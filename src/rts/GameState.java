@@ -6,6 +6,8 @@ import com.eclipsesource.json.JsonObject;
 import com.eclipsesource.json.JsonValue;
 import java.io.Writer;
 import java.util.*;
+import java.util.stream.IntStream;
+
 import org.jdom.Element;
 import rts.units.Unit;
 import rts.units.UnitType;
@@ -25,11 +27,12 @@ public class GameState {
     protected int unitCancelationCounter = 0;  // only used if the action conflict resolution strategy is set to alternating
     
     protected int time = 0;
-    protected PhysicalGameState pgs = null;
-    protected HashMap<Unit,UnitActionAssignment> unitActions = new LinkedHashMap<>();
+    public PhysicalGameState pgs = null;
+    public HashMap<Unit,UnitActionAssignment> unitActions = new LinkedHashMap<>();
     protected UnitTypeTable utt = null;
 
-    protected int [][][][] matrixObservation;
+    public int [][][][] matrixObservation;
+    public int [][][][] entityObservation;
     public static final int numFeatureMaps = 5;
     public static final int numFeaturePlanes = 27;
 
@@ -785,6 +788,177 @@ public class GameState {
         w.write("]");
         w.write("}");
     }
+
+    public ArrayList[] getEntityObservation(int player) {
+        // entityObservation[player] = new EntityObservation();
+        // int[][] resourceEntities = new int[]
+        ArrayList<Long> ids = new ArrayList<Long>();
+        ArrayList<Long> unitActionActorIds = new ArrayList<Long>();
+        ArrayList<int[]> unitActionActorMasks = new ArrayList<int[]>();
+
+        ArrayList<Long> baseActionActorIds = new ArrayList<Long>();
+        ArrayList<int[]> baseActionActorMasks = new ArrayList<int[]>();
+
+        ArrayList<Long> barrackActionActorIds = new ArrayList<Long>();
+        ArrayList<int[]> barrackActionActorMasks = new ArrayList<int[]>();
+
+        ArrayList<int[]> resource = new ArrayList<int[]>();
+        ArrayList<int[]> base = new ArrayList<int[]>();
+        ArrayList<int[]> barracks = new ArrayList<int[]>();
+        ArrayList<int[]> worker = new ArrayList<int[]>();
+        ArrayList<int[]> light = new ArrayList<int[]>();
+        ArrayList<int[]> heavy = new ArrayList<int[]>();
+        ArrayList<int[]> ranged = new ArrayList<int[]>();
+        for (int i = 0; i < pgs.units.size(); i++) {
+            Unit u = pgs.units.get(i);
+            ids.add(u.getID());
+
+            switch (u.getType().name) {
+                case "Resource":
+                    resource.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Base":
+                    base.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Barracks":
+                    barracks.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Worker":
+                    worker.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Light":
+                    light.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Heavy":
+                    heavy.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+                case "Ranged":
+                    ranged.add(new int[]{(int)u.getID(), u.getX(), u.getY()});
+                    break;
+            }
+            List<UnitAction> uas;
+            if (unitActions.get(u) == null && u.getPlayer() == player) {
+                switch (u.getType().name) {
+                    case "Worker":
+                    case "Light":
+                    case "Heavy":
+                    case "Ranged":
+                        uas = u.getUnitActions(this);
+                        int [] unitActionActorMask = new int[4+4+4+8+49];
+                        for (UnitAction ua:uas) {
+                            switch (ua.type) {
+                                case UnitAction.TYPE_NONE: {
+                                    break;
+                                }
+                                case UnitAction.TYPE_MOVE: {
+                                    unitActionActorMask[0+ua.parameter] = 1;
+                                    break;
+                                }
+                                case UnitAction.TYPE_HARVEST: {
+                                    unitActionActorMask[4+ua.parameter] = 1;
+                                    break;
+                                }
+                                case UnitAction.TYPE_RETURN: {
+                                    unitActionActorMask[8+ua.parameter] = 1;
+                                    break;
+                                }
+                                case UnitAction.TYPE_PRODUCE: {
+                                    // Worker can produce Base, Barracks
+                                    if (ua.unitType.name.equals("Base")) {
+                                        unitActionActorMask[12+ua.parameter] = 1;
+                                    } else if (ua.unitType.name.equals("Barracks")) {
+                                        unitActionActorMask[16+ua.parameter] = 1;
+                                    }
+                                    break;
+                                }
+                                case UnitAction.TYPE_ATTACK_LOCATION: {
+                                    int maxAttackRange = 7;
+                                    int centerCoordinate = maxAttackRange / 2;
+                                    int relative_x = ua.x - u.getX();
+                                    int relative_y = ua.y - u.getY();
+                                    unitActionActorMask[20+(centerCoordinate+relative_y)*maxAttackRange+(centerCoordinate+relative_x)] = 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if (IntStream.of(unitActionActorMask).sum() > 0) {
+                            unitActionActorIds.add(u.getID());
+                            unitActionActorMasks.add(unitActionActorMask);
+                        }
+                        break;
+                    case "Base":
+                        uas = u.getUnitActions(this);
+                        int [] baseActionActorMask = new int[4];
+                        for (UnitAction ua:uas) {
+                            switch (ua.type) {
+                                case UnitAction.TYPE_PRODUCE: {
+                                    // base can only produce workers
+                                    baseActionActorMask[0+ua.parameter] = 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if (IntStream.of(baseActionActorMask).sum() > 0) {
+                            baseActionActorIds.add(u.getID());
+                            baseActionActorMasks.add(baseActionActorMask);
+                        }
+                        break;
+                    case "Barracks":
+                        uas = u.getUnitActions(this);
+                        int [] barrackActionActorMask = new int[12];
+                        for (UnitAction ua:uas) {
+                            switch (ua.type) {
+                                case UnitAction.TYPE_PRODUCE: {
+                                    // Barracks can produce Light, Heavy, Ranged
+                                    if (ua.unitType.name.equals("Light")) {
+                                        barrackActionActorMask[0+ua.parameter] = 1;
+                                    } else if (ua.unitType.name.equals("Heavy")) {
+                                        barrackActionActorMask[4+ua.parameter] = 1;
+                                    } else if (ua.unitType.name.equals("Ranged")) {
+                                        barrackActionActorMask[8+ua.parameter] = 1;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        if (IntStream.of(barrackActionActorMask).sum() > 0) {
+                            barrackActionActorIds.add(u.getID());
+                            barrackActionActorMasks.add(barrackActionActorMask);
+                        }
+                        break;
+                }
+            }
+            // UnitActionAssignment uaa = unitActions.get(u);
+            // System.out.println(u);
+            // System.out.println(uaa);
+            // matrixObservation[player][0][u.getY()][u.getX()] = u.getHitPoints();
+            // matrixObservation[player][1][u.getY()][u.getX()] = u.getResources();
+            // matrixObservation[player][2][u.getY()][u.getX()] = (u.getPlayer() + player) % 2;
+            // matrixObservation[player][3][u.getY()][u.getX()] = u.getType().ID;
+            // if (uaa != null) {
+            //     matrixObservation[player][4][u.getY()][u.getX()] = uaa.action.type;
+            // } else {
+            //     matrixObservation[player][4][u.getY()][u.getX()] = UnitAction.TYPE_NONE;
+            // }
+        }
+        return new ArrayList[]{
+            resource,
+            base,
+            barracks,
+            worker,
+            light,
+            heavy,
+            ranged,
+            ids,
+            unitActionActorIds,
+            unitActionActorMasks,
+            baseActionActorIds,
+            baseActionActorMasks,
+            barrackActionActorIds,
+            barrackActionActorMasks,
+        };
+    }
+
 
     public int [][][] getMatrixObservation(int player){
         if (matrixObservation == null) {
