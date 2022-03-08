@@ -145,6 +145,15 @@ public class JNIEntityClient {
         }
         // pa1 = ai1.getAction(player, player1gs, unitActions);
         PlayerAction pa1 = new PlayerAction();
+        ResourceUsage base_ru = new ResourceUsage();
+		for (Unit u : gs.getPhysicalGameState().getUnits()) {
+			UnitActionAssignment uaa = gs.unitActions.get(u);
+			if (uaa != null) {
+				ResourceUsage ru = uaa.action.resourceUsage(u, gs.getPhysicalGameState());
+				base_ru.merge(ru);
+			}
+        }
+        pa1.setResourceUsage(base_ru.clone());
 
         for (int i = 0; i < unitActionActors.length; i++) {
             Unit u = gs.pgs.getUnit(unitActionActors[i]);
@@ -171,7 +180,11 @@ public class JNIEntityClient {
             // System.out.println(u);
             // System.out.println("ua");
             // System.out.println(ua);
-            pa1.addUnitAction(u, ua);
+            if (ua.resourceUsage(u, gs.pgs).consistentWith(pa1.getResourceUsage(), gs)) {
+                ResourceUsage ru = ua.resourceUsage(u, gs.pgs);
+                pa1.getResourceUsage().merge(ru);                        
+                pa1.addUnitAction(u, ua);
+            }
         }
         for (int i = 0; i < baseActionActors.length; i++) {
             Unit u = gs.pgs.getUnit(baseActionActors[i]);
@@ -181,7 +194,11 @@ public class JNIEntityClient {
             // System.out.println(u);
             // System.out.println("ua");
             // System.out.println(ua);
-            pa1.addUnitAction(u, ua);
+            if (ua.resourceUsage(u, gs.pgs).consistentWith(pa1.getResourceUsage(), gs)) {
+                ResourceUsage ru = ua.resourceUsage(u, gs.pgs);
+                pa1.getResourceUsage().merge(ru);                        
+                pa1.addUnitAction(u, ua);
+            }
         }
         for (int i = 0; i < barrackActionActors.length; i++) {
             Unit u = gs.pgs.getUnit(barrackActionActors[i]);
@@ -197,7 +214,11 @@ public class JNIEntityClient {
             // System.out.println(u);
             // System.out.println("ua");
             // System.out.println(ua);
-            pa1.addUnitAction(u, ua);
+            if (ua.resourceUsage(u, gs.pgs).consistentWith(pa1.getResourceUsage(), gs)) {
+                ResourceUsage ru = ua.resourceUsage(u, gs.pgs);
+                pa1.getResourceUsage().merge(ru);                        
+                pa1.addUnitAction(u, ua);
+            }
         }
         pa1.fillWithNones(gs, player, 1);
         // System.out.println("pa1");
