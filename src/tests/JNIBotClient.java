@@ -59,7 +59,7 @@ public class JNIBotClient {
     UnitTypeTable utt;
     boolean partialObs;
     public RewardFunctionInterface[] rfs;
-    String mapPath;
+    public String mapPath;
     String micrortsPath;
     boolean gameover = false;
     boolean layerJSON = true;

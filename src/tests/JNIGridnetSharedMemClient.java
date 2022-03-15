@@ -48,7 +48,7 @@ public class JNIGridnetSharedMemClient {
     // Settings
     public RewardFunctionInterface[] rfs;
     String micrortsPath;
-    String mapPath;
+    public String mapPath;
     public AI ai2;
     UnitTypeTable utt;
     public boolean partialObs = false;

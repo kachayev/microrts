@@ -48,7 +48,7 @@ public class JNIGridnetSharedMemClientSelfPlay {
     // Settings
     public final RewardFunctionInterface[] rfs;
     final String micrortsPath;
-    String mapPath;
+    public String mapPath;
     final UnitTypeTable utt;
     boolean partialObs = false;
 
