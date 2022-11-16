@@ -33,7 +33,7 @@ public class GameState {
 
     public int [][][][] matrixObservation;
     public int [][][][] entityObservation;
-    public static final int numFeatureMaps = 5;
+    public static final int numFeatureMaps = 6;
     public static final int numFeaturePlanes = 27;
 
     /**
@@ -969,12 +969,14 @@ public class GameState {
         // playersMatrix is matrixObservation[player][2]
         // unitTypesMatrix is matrixObservation[player][3]
         // unitActionMatrix is matrixObservation[player][4]
+        // terrainMatrix is matrixObservation[player][5]
 
 
         for (int i=0; i<matrixObservation[player][0].length; i++) {
             Arrays.fill(matrixObservation[player][0][i], 0);
             Arrays.fill(matrixObservation[player][1][i], 0);
             Arrays.fill(matrixObservation[player][4][i], 0);
+            Arrays.fill(matrixObservation[player][5][i], 0);
             // temp default value for empty spaces
             Arrays.fill(matrixObservation[player][2][i], -1);
             Arrays.fill(matrixObservation[player][3][i], -1);
@@ -985,7 +987,10 @@ public class GameState {
             UnitActionAssignment uaa = unitActions.get(u);
             matrixObservation[player][0][u.getY()][u.getX()] = u.getHitPoints();
             matrixObservation[player][1][u.getY()][u.getX()] = u.getResources();
-            matrixObservation[player][2][u.getY()][u.getX()] = (u.getPlayer() + player) % 2;
+            matrixObservation[player][2][u.getY()][u.getX()] = u.getPlayer();
+            if (u.getPlayer() != -1) { // if the unit is owned by some player
+                matrixObservation[player][2][u.getY()][u.getX()] = (u.getPlayer() + player) % 2;
+            }
             matrixObservation[player][3][u.getY()][u.getX()] = u.getType().ID;
             if (uaa != null) {
                 matrixObservation[player][4][u.getY()][u.getX()] = uaa.action.type;
@@ -993,12 +998,17 @@ public class GameState {
                 matrixObservation[player][4][u.getY()][u.getX()] = UnitAction.TYPE_NONE;
             }
         }
+        for (int i = 0; i < pgs.height; i++) {
+            for (int j = 0; j < pgs.width; j++) {
+                matrixObservation[player][5][j][i] = pgs.getTerrain(i, j);
+            }
+        }
 
         // normalize by getting rid of -1
         for(int i=0; i<matrixObservation[player][2].length; i++) {
             for(int j=0; j<matrixObservation[player][2][i].length; j++) {
-                matrixObservation[player][3][i][j] += 1;
                 matrixObservation[player][2][i][j] += 1;
+                matrixObservation[player][3][i][j] += 1;
             }
         }
 
